@@ -437,8 +437,13 @@ func CountStats(fileJob *FileJob) {
 		langFeatures.Tokens = &Trie{}
 	}
 
+	// Initialize the counters
+	fileJob.StringLiterals = 0
+	fileJob.MagicNumbers = 0
+
 	endPoint := int(fileJob.Bytes - 1)
 	currentState := SBlank
+	previousState := SBlank // Track previous state to detect transitions
 	endComments := [][]byte{}
 	endString := []byte{}
 
@@ -451,6 +456,10 @@ func CountStats(fileJob *FileJob) {
 		// what the character is. The below is very CPU bound so need to be careful if
 		// changing anything in here and profile/measure afterwards!
 		// NB that the order of the if statements matters and has been set to what in benchmarks is most efficient
+
+		// Save previous state before it changes
+		previousState = currentState
+
 		if !isWhitespace(fileJob.Content[index]) {
 
 			switch currentState {
@@ -467,6 +476,11 @@ func CountStats(fileJob *FileJob) {
 				)
 			case SString:
 				index, currentState = stringState(fileJob, index, endPoint, endString, currentState, ignoreEscape)
+
+				// If we just left a string state, increment the string literal count
+				if previousState == SString && currentState != SString && CountLiterals {
+					fileJob.StringLiterals++
+				}
 			case SDocString:
 				// For a docstring we can either move into blank in which case we count it as a docstring
 				// or back into code in which case it should be counted as code
@@ -609,6 +623,12 @@ func CountStats(fileJob *FileJob) {
 	if !isGenerated && Minified && fileJob.Lines != 0 {
 		avgLineByteCount := len(fileJob.Content) / int(fileJob.Lines)
 		minifiedGeneratedCheck(avgLineByteCount, fileJob)
+	}
+
+	// After completing the main state machine processing
+	if CountLiterals {
+		// Look for magic numbers
+		detectMagicNumbers(fileJob)
 	}
 
 	// The final complexity line count slice is all the complexity counts per lines from 0 to fileJob.Lines
@@ -882,4 +902,255 @@ func unknownRemapLanguage(job *FileJob) bool {
 	}
 
 	return remapped
+}
+
+// detectMagicNumbers detects magic numbers in a file job.
+// BAD:  Blank   int64  `yaml:"blank"`
+// BAD: return time.Now().UTC().Format(time.RFC3339)
+func detectMagicNumbers(fileJob *FileJob) {
+	if fileJob.Content == nil || len(fileJob.Content) == 0 {
+		return
+	}
+
+	LanguageFeaturesMutex.Lock()
+	langFeatures := LanguageFeatures[fileJob.Language]
+	LanguageFeaturesMutex.Unlock()
+
+	// To maintain performance, process the content directly without splitting into lines
+	// We'll use state tracking to skip comments and handle line breaks
+	content := fileJob.Content
+
+	// Track line numbers that already have magic numbers
+	lineWithMagicNumbers := make(map[int]bool)
+	currentLine := 1             // Start at line 1
+	currentLineType := LINE_CODE // Assume code by default
+
+	// Keep track of line start positions to extract source lines for debugging
+	lineStartPositions := []int{0}
+
+	// Process each byte in the content
+	for i := 0; i < len(content); i++ {
+		// Check if we've reached the end of a line
+		if content[i] == '\n' {
+			currentLine++
+			currentLineType = LINE_CODE                          // Reset line type for next line
+			lineStartPositions = append(lineStartPositions, i+1) // Record start of next line
+			continue
+		}
+
+		// Skip processing if:
+		// 1. Current line is not code (comment or blank)
+		// 2. We've already found a magic number on this line
+		if currentLineType != LINE_CODE || lineWithMagicNumbers[currentLine] {
+			continue
+		}
+
+		// Check for comment markers at the start of tokens
+		if shouldProcess(content[i], langFeatures.ProcessMask) {
+			switch tokenType, _, _ := langFeatures.Tokens.Match(content[i:]); tokenType {
+			case TSlcomment, TMlcomment, TComplexity:
+				currentLineType = LINE_COMMENT
+				continue
+			}
+		}
+
+		// Check for magic numbers (only in code sections)
+		if isDigit(content[i]) ||
+			(content[i] == '-' && i+1 < len(content) && isDigit(content[i+1])) ||
+			(content[i] == '.' && i+1 < len(content) && isDigit(content[i+1])) {
+
+			// Check if this could be a magic number
+			if isMagicNumber, newIndex := isMagicNumberLiteral(content, i, langFeatures); isMagicNumber {
+				// Record this line as having a magic number and increment count
+				// only if we haven't already counted it
+				if !lineWithMagicNumbers[currentLine] {
+					lineWithMagicNumbers[currentLine] = true
+					fileJob.MagicNumbers++
+
+					// Print the source code line for debugging purposes
+					if Debug {
+						// Extract the line content
+						lineStart := lineStartPositions[currentLine-1]
+						lineEnd := len(content)
+						if currentLine < len(lineStartPositions) {
+							lineEnd = lineStartPositions[currentLine] - 1 // -1 to exclude the newline
+						} else {
+							// Find end of last line
+							for j := lineStart; j < len(content); j++ {
+								if content[j] == '\n' {
+									lineEnd = j
+									break
+								}
+							}
+						}
+
+						sourceLine := string(content[lineStart:lineEnd])
+						if fileJob.Filename == "formatters.go" {
+							printDebug(fmt.Sprintf("Magic number found on line %s:%d: %s", fileJob.Filename, currentLine, sourceLine))
+						}
+					}
+				}
+
+				// Skip to end of this number to avoid recounting it
+				i = newIndex - 1 // -1 because the loop will increment
+			}
+		}
+	}
+}
+
+func isMagicNumberLiteral(content []byte, index int, langFeatures LanguageFeature) (bool, int) {
+	// Skip whitespace
+	for index < len(content) && isWhitespace(content[index]) {
+		index++
+	}
+
+	if index >= len(content) {
+		return false, index
+	}
+
+	// Check if this might be the start of a number
+	if !(isDigit(content[index]) ||
+		(content[index] == '-' && index+1 < len(content) && isDigit(content[index+1])) ||
+		(content[index] == '.' && index+1 < len(content) && isDigit(content[index+1]))) {
+		return false, index
+	}
+
+	// Make sure it's not part of an identifier
+	if index > 0 && (isLetter(content[index-1]) || content[index-1] == '_') {
+		return false, index
+	}
+
+	// Capture the potential magic number
+	startIndex := index
+	endIndex := index
+
+	// Handle negative sign
+	if content[index] == '-' {
+		endIndex++
+	}
+
+	// Handle different number formats (decimal, hex, octal, binary)
+	// if endIndex+1 < len(content) && content[endIndex] == '0' {
+	// if endIndex+1 < len(content) && (content[endIndex+1] == 'x' || content[endIndex+1] == 'X') {
+	// 	// Hex format
+	// 	endIndex += 2
+	// 	for endIndex < len(content) && isHexDigit(content[endIndex]) {
+	// 		endIndex++
+	// 	}
+	// } else if endIndex+1 < len(content) && (content[endIndex+1] == 'b' || content[endIndex+1] == 'B') {
+	// 	// Binary format
+	// 	endIndex += 2
+	// 	for endIndex < len(content) && (content[endIndex] == '0' || content[endIndex] == '1') {
+	// 		endIndex++
+	// 	}
+	// } else if endIndex+1 < len(content) && isDigit(content[endIndex+1]) {
+	// 	// Octal format
+	// 	endIndex++
+	// 	for endIndex < len(content) && isDigit(content[endIndex]) {
+	// 		endIndex++
+	// 	}
+	// }
+	// } else {
+	// Decimal format
+	// Handle digits before decimal point
+	for endIndex < len(content) && isDigit(content[endIndex]) {
+		endIndex++
+	}
+
+	// Handle decimal point and following digits
+	if endIndex < len(content) && content[endIndex] == '.' {
+		endIndex++
+		for endIndex < len(content) && isDigit(content[endIndex]) {
+			endIndex++
+		}
+	}
+
+	// Handle scientific notation
+	// if endIndex < len(content) && (content[endIndex] == 'e' || content[endIndex] == 'E') {
+	// 	tempIndex := endIndex + 1
+
+	// 	// Handle optional sign in exponent
+	// 	if tempIndex < len(content) && (content[tempIndex] == '+' || content[tempIndex] == '-') {
+	// 		tempIndex++
+	// 	}
+
+	// 	// Must have at least one digit in exponent
+	// 	if tempIndex < len(content) && isDigit(content[tempIndex]) {
+	// 		endIndex = tempIndex
+	// 		for endIndex < len(content) && isDigit(content[endIndex]) {
+	// 			endIndex++
+	// 		}
+	// 	}
+	// }
+	// }
+
+	// Ensure we found something
+	if endIndex == startIndex || (endIndex == startIndex+1 && content[startIndex] == '-') {
+		return false, index
+	}
+
+	// Make sure it's not part of a larger identifier
+	if endIndex < len(content) && (isLetter(content[endIndex]) || content[endIndex] == '_') {
+		return false, index
+	}
+
+	// Check for common values we don't want to count as "magic"
+	// Instead of string conversion, directly check byte patterns
+	if isCommonValue(content, startIndex, endIndex) {
+		return false, index
+	}
+
+	return true, endIndex
+}
+
+// Helper function to check if a byte is a digit (0-9)
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+// Helper function to check if a byte is a letter (a-z, A-Z)
+func isLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// Helper function to check if a byte is a hex digit (0-9, a-f, A-F)
+func isHexDigit(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// Helper function to check if a number is a common value (0, 1, -1) without string conversion
+func isCommonValue(content []byte, start int, end int) bool {
+	length := end - start
+
+	// Check for "0"
+	if length == 1 && content[start] == '0' {
+		return true
+	}
+
+	// Check for "1"
+	if length == 1 && content[start] == '1' {
+		return true
+	}
+
+	// Check for "-1"
+	if length == 2 && content[start] == '-' && content[start+1] == '1' {
+		return true
+	}
+
+	return false
+}
+
+// 7. Function to add magic number patterns to language features
+// This would be called during initialization
+func updateLanguageFeaturesWithMagicNumbers() {
+	// We're using the existing language features without any modification
+	// But this function acts as a hook if we want to add magic number patterns in the future
+
+	// For certain languages, we might want to add specific rules
+	// For example, to handle special numeric literals in different languages
+
+	// This function is a placeholder for future language-specific optimizations
+	if Debug {
+		printDebug("Magic number detection enabled")
+	}
 }

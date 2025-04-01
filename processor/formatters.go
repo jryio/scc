@@ -30,6 +30,19 @@ var tabularShortBreakCi = "-----------------------------------------------------
 var tabularShortFormatHead = "%-20s %9s %9s %8s %9s %8s %10s\n"
 var tabularShortFormatBody = "%-20s %9d %9d %8d %9d %8d %10d\n"
 var tabularShortFormatFile = "%s %9d %8d %9d %8d %10d\n"
+
+var tabularShortFormatHeadWithLiterals = "%-20s %9s %9s %8s %9s %8s %10s %10s %10s\n"
+var tabularShortFormatBodyWithLiterals = "%-20s %9d %9d %8d %9d %8d %10d %10d %10d\n"
+var tabularShortFormatFileWithLiterals = "%s %9d %8d %9d %8d %10d %10d %10d\n"
+
+var tabularShortFormatHeadNoComplexityWithLiterals = "%-22s %11s %11s %10s %11s %9s %10s %10s\n"
+var tabularShortFormatBodyNoComplexityWithLiterals = "%-22s %11d %11d %10d %11d %9d %10d %10d\n"
+var tabularShortFormatFileNoComplexityWithLiterals = "%s %11d %10d %11d %9d %10d %10d\n"
+
+var tabularWideFormatHeadWithLiterals = "%-33s %9s %9s %8s %9s %8s %10s %16s %10s %10s\n"
+var tabularWideFormatBodyWithLiterals = "%-33s %9d %9d %8d %9d %8d %10d %16.2f %10d %10d\n"
+var tabularWideFormatFileWithLiterals = "%s %9d %8d %9d %8d %10d %16.2f %10d %10d\n"
+
 var tabularShortFormatFileMaxMean = "MaxLine / MeanLine %11d %9d\n"
 var shortFormatFileTruncate = 29
 var shortNameTruncate = 20
@@ -303,32 +316,66 @@ func toCSVSummary(input chan *FileJob) string {
 	records := make([][]string, 0, len(language))
 
 	for _, result := range language {
-		records = append(records, []string{
-			result.Name,
-			strconv.FormatInt(result.Lines, 10),
-			strconv.FormatInt(result.Code, 10),
-			strconv.FormatInt(result.Comment, 10),
-			strconv.FormatInt(result.Blank, 10),
-			strconv.FormatInt(result.Complexity, 10),
-			strconv.FormatInt(result.Bytes, 10),
-			strconv.FormatInt(result.Count, 10),
-			strconv.Itoa(len(ulocLanguageCount[result.Name])),
-		})
+		if CountLiterals {
+			records = append(records, []string{
+				result.Name,
+				strconv.FormatInt(result.Lines, 10),
+				strconv.FormatInt(result.Code, 10),
+				strconv.FormatInt(result.Comment, 10),
+				strconv.FormatInt(result.Blank, 10),
+				strconv.FormatInt(result.Complexity, 10),
+				strconv.FormatInt(result.Bytes, 10),
+				strconv.FormatInt(result.Count, 10),
+				strconv.Itoa(len(ulocLanguageCount[result.Name])),
+				strconv.FormatInt(result.StringLiterals, 10),
+				strconv.FormatInt(result.MagicNumbers, 10),
+			})
+		} else {
+			records = append(records, []string{
+				result.Name,
+				strconv.FormatInt(result.Lines, 10),
+				strconv.FormatInt(result.Code, 10),
+				strconv.FormatInt(result.Comment, 10),
+				strconv.FormatInt(result.Blank, 10),
+				strconv.FormatInt(result.Complexity, 10),
+				strconv.FormatInt(result.Bytes, 10),
+				strconv.FormatInt(result.Count, 10),
+				strconv.Itoa(len(ulocLanguageCount[result.Name])),
+			})
+		}
 	}
 
 	slices.SortFunc(records, getRecordsSortFunc())
 
-	recordsEnd := [][]string{{
-		"Language",
-		"Lines",
-		"Code",
-		"Comments",
-		"Blanks",
-		"Complexity",
-		"Bytes",
-		"Files",
-		"ULOC",
-	}}
+	var recordsEnd [][]string
+
+	if CountLiterals {
+		recordsEnd = [][]string{{
+			"Language",
+			"Lines",
+			"Code",
+			"Comments",
+			"Blanks",
+			"Complexity",
+			"Bytes",
+			"Files",
+			"ULOC",
+			"Strings",
+			"MagicNums",
+		}}
+	} else {
+		recordsEnd = [][]string{{
+			"Language",
+			"Lines",
+			"Code",
+			"Comments",
+			"Blanks",
+			"Complexity",
+			"Bytes",
+			"Files",
+			"ULOC",
+		}}
+	}
 
 	recordsEnd = append(recordsEnd, records...)
 
@@ -519,6 +566,8 @@ func toHtml(input chan *FileJob) string {
 func toHtmlTable(input chan *FileJob) string {
 	languages := map[string]LanguageSummary{}
 	var sumFiles, sumLines, sumCode, sumComment, sumBlank, sumComplexity, sumBytes int64 = 0, 0, 0, 0, 0, 0, 0
+	// Add counters for string literals and magic numbers
+	var sumStringLiterals, sumMagicNumbers int64 = 0, 0
 
 	for res := range input {
 		sumFiles++
@@ -529,6 +578,12 @@ func toHtmlTable(input chan *FileJob) string {
 		sumComplexity += res.Complexity
 		sumBytes += res.Bytes
 
+		// Add string literals and magic numbers if counting them
+		if CountLiterals {
+			sumStringLiterals += res.StringLiterals
+			sumMagicNumbers += res.MagicNumbers
+		}
+
 		_, ok := languages[res.Language]
 
 		if !ok {
@@ -536,30 +591,34 @@ func toHtmlTable(input chan *FileJob) string {
 			files = append(files, res)
 
 			languages[res.Language] = LanguageSummary{
-				Name:       res.Language,
-				Lines:      res.Lines,
-				Code:       res.Code,
-				Comment:    res.Comment,
-				Blank:      res.Blank,
-				Complexity: res.Complexity,
-				Count:      1,
-				Files:      files,
-				Bytes:      res.Bytes,
+				Name:           res.Language,
+				Lines:          res.Lines,
+				Code:           res.Code,
+				Comment:        res.Comment,
+				Blank:          res.Blank,
+				Complexity:     res.Complexity,
+				Count:          1,
+				Files:          files,
+				Bytes:          res.Bytes,
+				StringLiterals: res.StringLiterals,
+				MagicNumbers:   res.MagicNumbers,
 			}
 		} else {
 			tmp := languages[res.Language]
 			files := append(tmp.Files, res)
 
 			languages[res.Language] = LanguageSummary{
-				Name:       res.Language,
-				Lines:      tmp.Lines + res.Lines,
-				Code:       tmp.Code + res.Code,
-				Comment:    tmp.Comment + res.Comment,
-				Blank:      tmp.Blank + res.Blank,
-				Complexity: tmp.Complexity + res.Complexity,
-				Count:      tmp.Count + 1,
-				Files:      files,
-				Bytes:      tmp.Bytes + res.Bytes,
+				Name:           res.Language,
+				Lines:          tmp.Lines + res.Lines,
+				Code:           tmp.Code + res.Code,
+				Comment:        tmp.Comment + res.Comment,
+				Blank:          tmp.Blank + res.Blank,
+				Complexity:     tmp.Complexity + res.Complexity,
+				Count:          tmp.Count + 1,
+				Files:          files,
+				Bytes:          tmp.Bytes + res.Bytes,
+				StringLiterals: tmp.StringLiterals + res.StringLiterals,
+				MagicNumbers:   tmp.MagicNumbers + res.MagicNumbers,
 			}
 		}
 	}
@@ -573,7 +632,24 @@ func toHtmlTable(input chan *FileJob) string {
 
 	str := &strings.Builder{}
 
-	str.WriteString(`<table id="scc-table">
+	if CountLiterals {
+		str.WriteString(`<table id="scc-table">
+	<thead><tr>
+		<th>Language</th>
+		<th>Files</th>
+		<th>Lines</th>
+		<th>Blank</th>
+		<th>Comment</th>
+		<th>Code</th>
+		<th>Complexity</th>
+		<th>Bytes</th>
+		<th>Uloc</th>
+		<th>Strings</th>
+		<th>MagicNums</th>
+	</tr></thead>
+	<tbody>`)
+	} else {
+		str.WriteString(`<table id="scc-table">
 	<thead><tr>
 		<th>Language</th>
 		<th>Files</th>
@@ -586,9 +662,25 @@ func toHtmlTable(input chan *FileJob) string {
 		<th>Uloc</th>
 	</tr></thead>
 	<tbody>`)
+	}
 
 	for _, r := range language {
-		_, _ = fmt.Fprintf(str, `<tr>
+		if CountLiterals {
+			_, _ = fmt.Fprintf(str, `<tr>
+		<th>%s</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+	</tr>`, r.Name, len(r.Files), r.Lines, r.Blank, r.Comment, r.Code, r.Complexity, r.Bytes, len(ulocLanguageCount[r.Name]), r.StringLiterals, r.MagicNumbers)
+		} else {
+			_, _ = fmt.Fprintf(str, `<tr>
 		<th>%s</th>
 		<th>%d</th>
 		<th>%d</th>
@@ -599,12 +691,28 @@ func toHtmlTable(input chan *FileJob) string {
 		<th>%d</th>
 		<th>%d</th>
 	</tr>`, r.Name, len(r.Files), r.Lines, r.Blank, r.Comment, r.Code, r.Complexity, r.Bytes, len(ulocLanguageCount[r.Name]))
+		}
 
 		if Files {
 			sortSummaryFiles(&r)
 
 			for _, res := range r.Files {
-				_, _ = fmt.Fprintf(str, `<tr>
+				if CountLiterals {
+					_, _ = fmt.Fprintf(str, `<tr>
+		<td>%s</td>
+		<td></td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+		<td>%d</td>
+	</tr>`, res.Location, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.Bytes, res.Uloc, res.StringLiterals, res.MagicNumbers)
+				} else {
+					_, _ = fmt.Fprintf(str, `<tr>
 		<td>%s</td>
 		<td></td>
 		<td>%d</td>
@@ -615,12 +723,28 @@ func toHtmlTable(input chan *FileJob) string {
 		<td>%d</td>
 		<td>%d</td>
 	</tr>`, res.Location, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.Bytes, res.Uloc)
+				}
 			}
 		}
-
 	}
 
-	_, _ = fmt.Fprintf(str, `</tbody>
+	if CountLiterals {
+		_, _ = fmt.Fprintf(str, `</tbody>
+	<tfoot><tr>
+		<th>Total</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+		<th>%d</th>
+	</tr>`, sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumBytes, len(ulocGlobalCount), sumStringLiterals, sumMagicNumbers)
+	} else {
+		_, _ = fmt.Fprintf(str, `</tbody>
 	<tfoot><tr>
 		<th>Total</th>
 		<th>%d</th>
@@ -632,15 +756,24 @@ func toHtmlTable(input chan *FileJob) string {
 		<th>%d</th>
 		<th>%d</th>
 	</tr>`, sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumBytes, len(ulocGlobalCount))
+	}
 
 	if !Cocomo {
 		var sb strings.Builder
 		calculateCocomo(sumCode, &sb)
-		_, _ = fmt.Fprintf(str, `
+		if CountLiterals {
+			_, _ = fmt.Fprintf(str, `
+	<tr>
+		<th colspan="11">%s</th>
+	</tr></tfoot>
+	</table>`, strings.ReplaceAll(sb.String(), "\n", "<br>"))
+		} else {
+			_, _ = fmt.Fprintf(str, `
 	<tr>
 		<th colspan="9">%s</th>
 	</tr></tfoot>
 	</table>`, strings.ReplaceAll(sb.String(), "\n", "<br>"))
+		}
 	} else {
 		str.WriteString(`</tfoot></table>`)
 	}
@@ -737,7 +870,7 @@ create table t        (
              nComment      integer,
              nCode         integer,
              nComplexity   integer,
-             nUloc         integer    
+             nUloc         integer
 );`)
 
 	str.WriteString(toSqlInsert(input))
@@ -852,7 +985,13 @@ func fileSummarizeLong(input chan *FileJob) string {
 	str := &strings.Builder{}
 
 	str.WriteString(getTabularWideBreak())
-	fmt.Fprintf(str, tabularWideFormatHead, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity", "Complexity/Lines")
+
+	// Use different format depending on CountLiterals flag
+	if CountLiterals {
+		fmt.Fprintf(str, tabularWideFormatHeadWithLiterals, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity", "Complexity/Lines", "Strings", "MagicNums")
+	} else {
+		fmt.Fprintf(str, tabularWideFormatHead, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity", "Complexity/Lines")
+	}
 
 	if !Files {
 		str.WriteString(getTabularWideBreak())
@@ -860,6 +999,8 @@ func fileSummarizeLong(input chan *FileJob) string {
 
 	langs := map[string]LanguageSummary{}
 	var sumFiles, sumLines, sumCode, sumComment, sumBlank, sumComplexity, sumBytes int64 = 0, 0, 0, 0, 0, 0, 0
+	// Add counters for string literals and magic numbers
+	var sumStringLiterals, sumMagicNumbers int64 = 0, 0
 	var sumWeightedComplexity float64
 
 	for res := range input {
@@ -870,6 +1011,12 @@ func fileSummarizeLong(input chan *FileJob) string {
 		sumBlank += res.Blank
 		sumComplexity += res.Complexity
 		sumBytes += res.Bytes
+
+		// Add string literals and magic numbers if counting them
+		if CountLiterals {
+			sumStringLiterals += res.StringLiterals
+			sumMagicNumbers += res.MagicNumbers
+		}
 
 		var weightedComplexity float64
 		if res.Code != 0 {
@@ -895,6 +1042,9 @@ func fileSummarizeLong(input chan *FileJob) string {
 				WeightedComplexity: weightedComplexity,
 				Files:              files,
 				LineLength:         res.LineLength,
+				// Add string literals and magic numbers
+				StringLiterals: res.StringLiterals,
+				MagicNumbers:   res.MagicNumbers,
 			}
 		} else {
 			tmp := langs[res.Language]
@@ -912,6 +1062,9 @@ func fileSummarizeLong(input chan *FileJob) string {
 				WeightedComplexity: tmp.WeightedComplexity + weightedComplexity,
 				Files:              files,
 				LineLength:         lineLength,
+				// Add string literals and magic numbers
+				StringLiterals: tmp.StringLiterals + res.StringLiterals,
+				MagicNumbers:   tmp.MagicNumbers + res.MagicNumbers,
 			}
 		}
 	}
@@ -934,7 +1087,12 @@ func fileSummarizeLong(input chan *FileJob) string {
 			trimmedName = summary.Name[:longNameTruncate-1] + "…"
 		}
 
-		fmt.Fprintf(str, tabularWideFormatBody, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity, summary.WeightedComplexity)
+		// Output with or without literals based on flag
+		if CountLiterals {
+			fmt.Fprintf(str, tabularWideFormatBodyWithLiterals, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity, summary.WeightedComplexity, summary.StringLiterals, summary.MagicNumbers)
+		} else {
+			fmt.Fprintf(str, tabularWideFormatBody, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity, summary.WeightedComplexity)
+		}
 
 		if Percent {
 			fmt.Fprintf(str,
@@ -973,7 +1131,11 @@ func fileSummarizeLong(input chan *FileJob) string {
 				tmp := unicodeAwareTrim(res.Location, wideFormatFileTruncate)
 				tmp = unicodeAwareRightPad(tmp, 43)
 
-				fmt.Fprintf(str, tabularWideFormatFile, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.WeightedComplexity)
+				if CountLiterals {
+					fmt.Fprintf(str, tabularWideFormatFileWithLiterals, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.WeightedComplexity, res.StringLiterals, res.MagicNumbers)
+				} else {
+					fmt.Fprintf(str, tabularWideFormatFile, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.WeightedComplexity)
+				}
 			}
 		}
 	}
@@ -983,7 +1145,11 @@ func fileSummarizeLong(input chan *FileJob) string {
 	}
 
 	str.WriteString(getTabularWideBreak())
-	fmt.Fprintf(str, tabularWideFormatBody, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumWeightedComplexity)
+	if CountLiterals {
+		fmt.Fprintf(str, tabularWideFormatBodyWithLiterals, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumWeightedComplexity, sumStringLiterals, sumMagicNumbers)
+	} else {
+		fmt.Fprintf(str, tabularWideFormatBody, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumWeightedComplexity)
+	}
 	str.WriteString(getTabularWideBreak())
 
 	if UlocMode {
@@ -1043,10 +1209,18 @@ func fileSummarizeShort(input chan *FileJob) string {
 	str := &strings.Builder{}
 
 	str.WriteString(getTabularShortBreak())
-	if !Complexity {
-		fmt.Fprintf(str, tabularShortFormatHead, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity")
+	if CountLiterals {
+		if !Complexity {
+			fmt.Fprintf(str, tabularShortFormatHeadWithLiterals, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity", "Strings", "MagicNums")
+		} else {
+			fmt.Fprintf(str, tabularShortFormatHeadNoComplexityWithLiterals, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Strings", "MagicNums")
+		}
 	} else {
-		fmt.Fprintf(str, tabularShortFormatHeadNoComplexity, "Language", "Files", "Lines", "Blanks", "Comments", "Code")
+		if !Complexity {
+			fmt.Fprintf(str, tabularShortFormatHead, "Language", "Files", "Lines", "Blanks", "Comments", "Code", "Complexity")
+		} else {
+			fmt.Fprintf(str, tabularShortFormatHeadNoComplexity, "Language", "Files", "Lines", "Blanks", "Comments", "Code")
+		}
 	}
 
 	if !Files {
@@ -1055,6 +1229,8 @@ func fileSummarizeShort(input chan *FileJob) string {
 
 	lang := map[string]LanguageSummary{}
 	var sumFiles, sumLines, sumCode, sumComment, sumBlank, sumComplexity, sumBytes int64 = 0, 0, 0, 0, 0, 0, 0
+	// Add counters for string literals and magic numbers
+	var sumStringLiterals, sumMagicNumbers int64 = 0, 0
 
 	for res := range input {
 		sumFiles++
@@ -1064,6 +1240,12 @@ func fileSummarizeShort(input chan *FileJob) string {
 		sumBlank += res.Blank
 		sumComplexity += res.Complexity
 		sumBytes += res.Bytes
+
+		// Add string literals and magic numbers if counting them
+		if CountLiterals {
+			sumStringLiterals += res.StringLiterals
+			sumMagicNumbers += res.MagicNumbers
+		}
 
 		_, ok := lang[res.Language]
 
@@ -1081,6 +1263,9 @@ func fileSummarizeShort(input chan *FileJob) string {
 				Count:      1,
 				Files:      files,
 				LineLength: res.LineLength,
+				// Add string literals and magic numbers
+				StringLiterals: res.StringLiterals,
+				MagicNumbers:   res.MagicNumbers,
 			}
 		} else {
 			tmp := lang[res.Language]
@@ -1097,6 +1282,9 @@ func fileSummarizeShort(input chan *FileJob) string {
 				Count:      tmp.Count + 1,
 				Files:      files,
 				LineLength: lineLength,
+				// Add string literals and magic numbers
+				StringLiterals: tmp.StringLiterals + res.StringLiterals,
+				MagicNumbers:   tmp.MagicNumbers + res.MagicNumbers,
 			}
 		}
 	}
@@ -1118,10 +1306,18 @@ func fileSummarizeShort(input chan *FileJob) string {
 		trimmedName := summary.Name
 		trimmedName = trimNameShort(summary, trimmedName)
 
-		if !Complexity {
-			_, _ = fmt.Fprintf(str, tabularShortFormatBody, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity)
+		if CountLiterals {
+			if !Complexity {
+				_, _ = fmt.Fprintf(str, tabularShortFormatBodyWithLiterals, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity, summary.StringLiterals, summary.MagicNumbers)
+			} else {
+				_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexityWithLiterals, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.StringLiterals, summary.MagicNumbers)
+			}
 		} else {
-			_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexity, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code)
+			if !Complexity {
+				_, _ = fmt.Fprintf(str, tabularShortFormatBody, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code, summary.Complexity)
+			} else {
+				_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexity, trimmedName, summary.Count, summary.Lines, summary.Blank, summary.Comment, summary.Code)
+			}
 		}
 
 		if Percent {
@@ -1166,12 +1362,22 @@ func fileSummarizeShort(input chan *FileJob) string {
 			for _, res := range summary.Files {
 				tmp := unicodeAwareTrim(res.Location, shortFormatFileTruncate)
 
-				if !Complexity {
-					tmp = unicodeAwareRightPad(tmp, 30)
-					_, _ = fmt.Fprintf(str, tabularShortFormatFile, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity)
+				if CountLiterals {
+					if !Complexity {
+						tmp = unicodeAwareRightPad(tmp, 30)
+						_, _ = fmt.Fprintf(str, tabularShortFormatFileWithLiterals, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity, res.StringLiterals, res.MagicNumbers)
+					} else {
+						tmp = unicodeAwareRightPad(tmp, 34)
+						_, _ = fmt.Fprintf(str, tabularShortFormatFileNoComplexityWithLiterals, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.StringLiterals, res.MagicNumbers)
+					}
 				} else {
-					tmp = unicodeAwareRightPad(tmp, 34)
-					_, _ = fmt.Fprintf(str, tabularShortFormatFileNoComplexity, tmp, res.Lines, res.Blank, res.Comment, res.Code)
+					if !Complexity {
+						tmp = unicodeAwareRightPad(tmp, 30)
+						_, _ = fmt.Fprintf(str, tabularShortFormatFile, tmp, res.Lines, res.Blank, res.Comment, res.Code, res.Complexity)
+					} else {
+						tmp = unicodeAwareRightPad(tmp, 34)
+						_, _ = fmt.Fprintf(str, tabularShortFormatFileNoComplexity, tmp, res.Lines, res.Blank, res.Comment, res.Code)
+					}
 				}
 			}
 		}
@@ -1198,10 +1404,18 @@ func fileSummarizeShort(input chan *FileJob) string {
 	}
 
 	str.WriteString(getTabularShortBreak())
-	if !Complexity {
-		_, _ = fmt.Fprintf(str, tabularShortFormatBody, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity)
+	if CountLiterals {
+		if !Complexity {
+			_, _ = fmt.Fprintf(str, tabularShortFormatBodyWithLiterals, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity, sumStringLiterals, sumMagicNumbers)
+		} else {
+			_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexityWithLiterals, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumStringLiterals, sumMagicNumbers)
+		}
 	} else {
-		_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexity, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode)
+		if !Complexity {
+			_, _ = fmt.Fprintf(str, tabularShortFormatBody, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode, sumComplexity)
+		} else {
+			_, _ = fmt.Fprintf(str, tabularShortFormatBodyNoComplexity, "Total", sumFiles, sumLines, sumBlank, sumComment, sumCode)
+		}
 	}
 	str.WriteString(getTabularShortBreak())
 
@@ -1377,6 +1591,9 @@ func aggregateLanguageSummary(input chan *FileJob) []LanguageSummary {
 				Files:      files,
 				Bytes:      res.Bytes,
 				ULOC:       0,
+				// Add string literals and magic numbers
+				StringLiterals: res.StringLiterals,
+				MagicNumbers:   res.MagicNumbers,
 			}
 		} else {
 			tmp := langs[res.Language]
@@ -1396,6 +1613,9 @@ func aggregateLanguageSummary(input chan *FileJob) []LanguageSummary {
 				Files:      files,
 				Bytes:      res.Bytes + tmp.Bytes,
 				ULOC:       0,
+				// Add string literals and magic numbers
+				StringLiterals: tmp.StringLiterals + res.StringLiterals,
+				MagicNumbers:   tmp.MagicNumbers + res.MagicNumbers,
 			}
 		}
 	}
@@ -1450,6 +1670,20 @@ func sortLanguageSummary(language []LanguageSummary) []LanguageSummary {
 	case "complexity", "complexitys":
 		slices.SortFunc(language, func(a, b LanguageSummary) int {
 			if order := cmp.Compare(b.Complexity, a.Complexity); order != 0 {
+				return order
+			}
+			return strings.Compare(a.Name, b.Name)
+		})
+	case "stringliterals", "stringliteral", "strings", "string":
+		slices.SortFunc(language, func(a, b LanguageSummary) int {
+			if order := cmp.Compare(b.StringLiterals, a.StringLiterals); order != 0 {
+				return order
+			}
+			return strings.Compare(a.Name, b.Name)
+		})
+	case "magicnumbers", "magicnumber", "magic", "numbers":
+		slices.SortFunc(language, func(a, b LanguageSummary) int {
+			if order := cmp.Compare(b.MagicNumbers, a.MagicNumbers); order != 0 {
 				return order
 			}
 			return strings.Compare(a.Name, b.Name)

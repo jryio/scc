@@ -425,6 +425,12 @@ func main() {
 		"$",
 		"set currency symbol",
 	)
+	flags.BoolVar(
+		&processor.CountLiterals,
+		"literals",
+		false,
+		"count string literals and magic numbers in code",
+	)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

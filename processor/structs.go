@@ -37,6 +37,7 @@ type Language struct {
 	Keywords         []string   `json:"keywords"`
 	FileNames        []string   `json:"filenames"`
 	SheBangs         []string   `json:"shebangs"`
+	MagicNumbers     []string   `json:"magicnumbers"`
 }
 
 // LanguageFeature is a struct which represents the conversion from Language into what is used for matching
@@ -79,6 +80,8 @@ type FileJob struct {
 	Comment            int64
 	Blank              int64
 	Complexity         int64
+	StringLiterals     int64 // new addition
+	MagicNumbers       int64 // new addition
 	ComplexityLine     []int64
 	WeightedComplexity float64
 	Hash               hash.Hash
@@ -102,6 +105,8 @@ type LanguageSummary struct {
 	Blank              int64
 	Complexity         int64
 	Count              int64
+	StringLiterals     int64 // new addition
+	MagicNumbers       int64 // new addition
 	WeightedComplexity float64
 	Files              []*FileJob
 	LineLength         []int

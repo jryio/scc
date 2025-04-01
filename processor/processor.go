@@ -42,6 +42,9 @@ var Debug = false
 // Trace enables trace logging output which is extremely verbose
 var Trace = false
 
+// CountLiterals enables literal count output
+var CountLiterals = false
+
 // Duplicates enables duplicate file detection
 var Duplicates = false
 
@@ -565,6 +568,7 @@ func Process() {
 	}
 
 	ProcessConstants()
+	updateLanguageFeaturesWithMagicNumbers()
 	processFlags()
 
 	// Clean up any invalid arguments before setting everything up
