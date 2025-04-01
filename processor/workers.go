@@ -19,12 +19,12 @@ const (
 	SBlank             int64 = 1
 	SCode              int64 = 2
 	SComment           int64 = 3
-	SCommentCode       int64 = 4 // Indicates comment after code
+	SCommentCode       int64 = 4 // Indicates comment after code - E.g. this very comment is after code
 	SMulticomment      int64 = 5
-	SMulticommentCode  int64 = 6 // Indicates multi comment after code
-	SMulticommentBlank int64 = 7 // Indicates multi comment ended with blank afterward
-	SString            int64 = 8
-	SDocString         int64 = 9
+	SMulticommentCode  int64 = 6 // Indicates multi comment after code /* E.g. this very comment is multi line comment after code */
+	SMulticommentBlank int64 = 7 // Indicates multi comment ended with blank afterward E.g. /**/
+	SString            int64 = 8 // Indicates string
+	SDocString         int64 = 9 // Indicates documentation string
 )
 
 // SheBang is a global constant for indicating a shebang file header
@@ -137,6 +137,9 @@ func stringState(fileJob *FileJob, index int, endPoint int, endString []byte, cu
 
 			// if number of escapes is even, all escapes are themselves escaped
 			// otherwise the last escape does escape current string terminator
+			//
+			// E.g. \\\\" is a string terminator
+			// E.g. \\\\\" is not a string terminator
 			if num_escapes%2 != 0 {
 				is_escaped = true
 			}
@@ -145,7 +148,7 @@ func stringState(fileJob *FileJob, index int, endPoint int, endString []byte, cu
 		// If we are in a literal string we want to ignore escapes OR we aren't checking for special ones
 		if ignoreEscape || !is_escaped {
 			if checkForMatchSingle(fileJob.Content[i], index, endPoint, endString, fileJob) {
-				return i, SCode
+				return i, SCode // we are now in the code state
 			}
 		}
 	}
@@ -261,6 +264,9 @@ func codeState(
 				}
 
 			case TComplexity:
+				// We hit a complexity token in the code state
+				// 1. Overall complexity for the file goes up
+				// 2. Complexity for the current line goes up
 				if index == 0 || isWhitespace(fileJob.Content[index-1]) {
 					fileJob.Complexity++
 					fileJob.ComplexityLine[len(fileJob.ComplexityLine)-1] = fileJob.ComplexityLine[len(fileJob.ComplexityLine)-1] + 1
@@ -438,7 +444,7 @@ func CountStats(fileJob *FileJob) {
 
 	// TODO needs to be set via langFeatures.Quotes[0].IgnoreEscape for the matching feature
 	ignoreEscape := false
-	fileJob.ComplexityLine = append(fileJob.ComplexityLine, 0)
+	fileJob.ComplexityLine = append(fileJob.ComplexityLine, 0) // line starts with no complexity count
 
 	for index := checkBomSkip(fileJob); index < int(fileJob.Bytes); index++ {
 		// Based on our current state determine if the state should change by checking
@@ -506,6 +512,7 @@ func CountStats(fileJob *FileJob) {
 		// we are currently in
 		if fileJob.Content[index] == '\n' || index >= endPoint {
 			fileJob.Lines++
+			// initialize the complexity count for the new line to be zero, later the state machine will update it based on the code complexity
 			fileJob.ComplexityLine = append(fileJob.ComplexityLine, 0)
 
 			if NoLarge && fileJob.Lines >= LargeLineCount {
@@ -559,7 +566,7 @@ func CountStats(fileJob *FileJob) {
 				}
 			}
 		}
-	}
+	} // done with processing all the bytes in the file
 
 	if UlocMode && Files {
 		uloc := map[string]struct{}{}
@@ -604,6 +611,7 @@ func CountStats(fileJob *FileJob) {
 		minifiedGeneratedCheck(avgLineByteCount, fileJob)
 	}
 
+	// The final complexity line count slice is all the complexity counts per lines from 0 to fileJob.Lines
 	fileJob.ComplexityLine = fileJob.ComplexityLine[:fileJob.Lines]
 }
 

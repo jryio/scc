@@ -142,8 +142,12 @@ func (c *CheckDuplicates) Check(key int64, hash []byte) bool {
 
 // Trie is a structure used to store matches efficiently
 type Trie struct {
-	Type  int
+	// Type is the TokenType
+	Type int
+	// Close is the closing token for the type
 	Close []byte
+	// Table is the table of children nodes,
+	// The character's byte is used as the index into the table
 	Table [256]*Trie
 }
 
